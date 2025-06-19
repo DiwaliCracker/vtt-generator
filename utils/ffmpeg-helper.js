@@ -25,8 +25,8 @@ async function generateThumbnails(videoUrl) {
     writer.on('error', reject);
   });
 
-  const tileX = 5, tileY = 5, interval = 10, width = 160, thumbHeight = 90;
-  const total = tileX * tileY;
+  const interval = 10, width = 160, thumbHeight = 90;
+  const total = 25;
 
   let progressData = { total, generated: 0 };
   fs.writeFileSync(statusJson, JSON.stringify(progressData));
@@ -35,48 +35,51 @@ async function generateThumbnails(videoUrl) {
   for (let i = 0; i < total; i++) {
     const time = i * interval;
     const outputPath = path.join(thumbsDir, `thumb${i}.jpg`);
-    await new Promise((resolve, reject) => {
-      ffmpeg(tmpVideo)
-        .seekInput(time)
-        .frames(1)
-        .size(`${width}x${thumbHeight}`)
-        .on('end', () => {
-          thumbs.push(outputPath);
-          progressData.generated++;
-          fs.writeFileSync(statusJson, JSON.stringify(progressData));
-          resolve();
-        })
-        .on('error', reject)
-        .save(outputPath);
-    });
+    try {
+      await new Promise((resolve, reject) => {
+        ffmpeg(tmpVideo)
+          .seekInput(time)
+          .frames(1)
+          .size(`${width}x${thumbHeight}`)
+          .on('end', () => {
+            thumbs.push(outputPath);
+            progressData.generated++;
+            fs.writeFileSync(statusJson, JSON.stringify(progressData));
+            resolve();
+          })
+          .on('error', () => {
+            resolve(); // Skip missing frame
+          })
+          .save(outputPath);
+      });
+    } catch (e) {}
   }
 
-  // Merge to sprite image
+  const gridCols = Math.ceil(Math.sqrt(thumbs.length));
+  const gridRows = Math.ceil(thumbs.length / gridCols);
+
   await new Promise((resolve, reject) => {
     ffmpeg()
       .input(`concat:${thumbs.join('|')}`)
-      .inputOptions('-pattern_type', 'glob')
-      .outputOptions(`-vf tile=${tileX}x${tileY}`)
+      .inputOptions('-f', 'image2pipe')
+      .inputFormat('image2')
+      .outputOptions(`-vf tile=${gridCols}x${gridRows}`)
       .on('end', resolve)
       .on('error', reject)
       .save(sprite);
   });
 
-  // VTT generation
   let vttContent = "WEBVTT\n\n";
-  let count = 0;
-  for (let y = 0; y < tileY; y++) {
-    for (let x = 0; x < tileX; x++) {
-      const start = formatTime(count * interval);
-      const end = formatTime((count + 1) * interval);
-      const xPos = x * width;
-      const yPos = y * thumbHeight;
+  for (let i = 0; i < thumbs.length; i++) {
+    const start = formatTime(i * interval);
+    const end = formatTime((i + 1) * interval);
+    const x = i % gridCols;
+    const y = Math.floor(i / gridCols);
+    const xPos = x * width;
+    const yPos = y * thumbHeight;
 
-      vttContent += `${start} --> ${end}\n`;
-      vttContent += `${path.basename(sprite)}#xywh=${xPos},${yPos},${width},${thumbHeight}\n\n`;
-
-      count++;
-    }
+    vttContent += `${start} --> ${end}\n`;
+    vttContent += `${path.basename(sprite)}#xywh=${xPos},${yPos},${width},${thumbHeight}\n\n`;
   }
 
   fs.writeFileSync(vtt, vttContent);
