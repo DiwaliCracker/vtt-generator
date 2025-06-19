@@ -26,13 +26,13 @@ async function generateThumbnails(videoUrl) {
   });
 
   const interval = 10, width = 160, thumbHeight = 90;
-  const total = 25;
+  const maxThumbs = 100; // 10x10 layout target
 
-  let progressData = { total, generated: 0 };
+  let progressData = { total: maxThumbs, generated: 0 };
   fs.writeFileSync(statusJson, JSON.stringify(progressData));
 
   const thumbs = [];
-  for (let i = 0; i < total; i++) {
+  for (let i = 0; i < maxThumbs; i++) {
     const time = i * interval;
     const outputPath = path.join(thumbsDir, `thumb${i}.jpg`);
     try {
@@ -47,15 +47,17 @@ async function generateThumbnails(videoUrl) {
             fs.writeFileSync(statusJson, JSON.stringify(progressData));
             resolve();
           })
-          .on('error', () => {
-            resolve(); // Skip missing frame
-          })
+          .on('error', () => resolve()) // Skip missing frame
           .save(outputPath);
       });
     } catch (e) {}
   }
 
-  const gridCols = Math.ceil(Math.sqrt(thumbs.length));
+  if (thumbs.length === 0) {
+    throw new Error("No thumbnails could be generated.");
+  }
+
+  const gridCols = 10;
   const gridRows = Math.ceil(thumbs.length / gridCols);
 
   await new Promise((resolve, reject) => {
