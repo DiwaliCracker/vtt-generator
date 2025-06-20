@@ -25,41 +25,40 @@ async function generateThumbnails(videoUrl) {
     writer.on('error', reject);
   });
 
-  const interval = 10, width = 160, thumbHeight = 90;
-  const maxThumbs = 100; // 10x10 layout target
-
-  let progressData = { total: maxThumbs, generated: 0 };
+  const interval = 10; // seconds between frames
+  const width = 160, thumbHeight = 90;
+  const thumbs = [];
+  let time = 0, index = 0;
+  const progressData = { total: 0, generated: 0 };
   fs.writeFileSync(statusJson, JSON.stringify(progressData));
 
-  const thumbs = [];
-  for (let i = 0; i < maxThumbs; i++) {
-    const time = i * interval;
-    const outputPath = path.join(thumbsDir, `thumb${i}.jpg`);
-    try {
-      await new Promise((resolve, reject) => {
-        ffmpeg(tmpVideo)
-          .seekInput(time)
-          .frames(1)
-          .size(`${width}x${thumbHeight}`)
-          .on('end', () => {
-            thumbs.push(outputPath);
-            progressData.generated++;
-            fs.writeFileSync(statusJson, JSON.stringify(progressData));
-            resolve();
-          })
-          .on('error', () => resolve()) // Skip missing frame
-          .save(outputPath);
-      });
-    } catch (e) {}
+  // Extract as many thumbnails as possible
+  while (true) {
+    const outputPath = path.join(thumbsDir, `thumb${index}.jpg`);
+    const result = await new Promise((resolve) => {
+      ffmpeg(tmpVideo)
+        .seekInput(time)
+        .frames(1)
+        .size(`${width}x${thumbHeight}`)
+        .on('end', () => resolve(true))
+        .on('error', () => resolve(false))
+        .save(outputPath);
+    });
+    if (!result) break;
+    thumbs.push(outputPath);
+    index++;
+    time += interval;
+    progressData.total = index;
+    progressData.generated = index;
+    fs.writeFileSync(statusJson, JSON.stringify(progressData));
   }
 
-  if (thumbs.length === 0) {
-    throw new Error("No thumbnails could be generated.");
-  }
+  if (thumbs.length === 0) throw new Error("No thumbnails generated");
 
-  const gridCols = 10;
+  const gridCols = Math.min(10, Math.ceil(Math.sqrt(thumbs.length)));
   const gridRows = Math.ceil(thumbs.length / gridCols);
 
+  // Generate sprite
   await new Promise((resolve, reject) => {
     ffmpeg()
       .input(`concat:${thumbs.join('|')}`)
@@ -71,6 +70,7 @@ async function generateThumbnails(videoUrl) {
       .save(sprite);
   });
 
+  // Create VTT
   let vttContent = "WEBVTT\n\n";
   for (let i = 0; i < thumbs.length; i++) {
     const start = formatTime(i * interval);
